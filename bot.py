@@ -336,7 +336,8 @@ async def extra_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for i, child in enumerate(data['children'], 1):
         summary += f"👶 *{i}-bola: {child['name']}*\n"
         summary += f"   🎂 Yoshi: {child['age']}\n"
-        summary += f"   {'👦' if 'O'g'il' in child['gender'] else '👧'} Jinsi: {child['gender']}\n"
+        emoji = "👦" if "O‘g‘il" in child['gender'] else "👧"
+        summary += f"{emoji} Jinsi: {child['gender']}\n"
         summary += f"   🧠 Xarakteri: {child['character']}\n"
         summary += f"   📸 Rasmlar: {len(child['photos'])} ta\n\n"
 
