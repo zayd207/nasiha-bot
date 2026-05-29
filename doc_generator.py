@@ -1,95 +1,87 @@
-from docx import Document
-from docx.shared import Pt, RGBColor, Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from datetime import datetime
 import os
+import json
+import logging
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google.oauth2 import service_account
 
-def generate_doc(data: dict) -> str:
-    doc = Document()
+logger = logging.getLogger(__name__)
 
-    # ── Styles ──────────────────────────────────────────────────────────────
-    style = doc.styles['Normal']
-    style.font.name = 'Calibri'
-    style.font.size = Pt(11)
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
-    def heading(text, level=1, color=None):
-        p = doc.add_heading(text, level=level)
-        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        if color:
-            for run in p.runs:
-                run.font.color.rgb = RGBColor(*color)
-        return p
+# Mime type map
+MIME_TYPES = {
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.pdf':  'application/pdf',
+    '.png':  'image/png',
+    '.heic': 'image/heic',
+    '.heif': 'image/heif',
+    '.webp': 'image/webp',
+    '.gif':  'image/gif',
+}
 
-    def field(label, value, bold_label=True):
-        p = doc.add_paragraph()
-        run = p.add_run(f"{label}: ")
-        run.bold = bold_label
-        run.font.size = Pt(11)
-        p.add_run(str(value)).font.size = Pt(11)
-        return p
 
-    def divider():
-        p = doc.add_paragraph("━" * 50)
-        p.runs[0].font.color.rgb = RGBColor(180, 180, 180)
-        p.runs[0].font.size = Pt(9)
+def _get_mime(filename: str) -> str:
+    ext = os.path.splitext(filename.lower())[1]
+    return MIME_TYPES.get(ext, 'image/jpeg')
 
-    # ── Header ──────────────────────────────────────────────────────────────
-    title = doc.add_heading('NASIHA — BUYURTMA SHAKLI', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for run in title.runs:
-        run.font.color.rgb = RGBColor(15, 27, 51)  # #0F1B33
 
-    sub = doc.add_paragraph('Mehr va Tarbiya Olami')
-    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    sub.runs[0].font.color.rgb = RGBColor(212, 175, 55)  # #D4AF37 gold
-    sub.runs[0].font.size = Pt(12)
+class GoogleDriveManager:
+    def __init__(self):
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        if creds_json:
+            creds_info = json.loads(creds_json)
+        else:
+            with open("credentials.json") as f:
+                creds_info = json.load(f)
 
-    doc.add_paragraph()
+        credentials = service_account.Credentials.from_service_account_info(
+            creds_info, scopes=SCOPES
+        )
+        self.service = build('drive', 'v3', credentials=credentials)
+        self.root_folder_id = os.environ.get("DRIVE_ROOT_FOLDER_ID", "")
+        if not self.root_folder_id:
+            raise EnvironmentError("DRIVE_ROOT_FOLDER_ID environment variable is not set!")
 
-    # ── Client info ─────────────────────────────────────────────────────────
-    heading('MIJOZ MA\'LUMOTLARI', level=1, color=(15, 27, 51))
-    field('Ism va Familiya', data.get('client_name', ''))
-    field('Telefon', data.get('client_phone', ''))
-    field('Manzil', data.get('client_city', ''))
-    field('Buyurtma sanasi', datetime.now().strftime("%d.%m.%Y %H:%M"))
-    field('Bolalar soni', len(data.get('children', [])))
-    divider()
+    def create_folder(self, name: str, parent_id: str = None) -> str:
+        """Create a folder and return its ID."""
+        parent = parent_id or self.root_folder_id
+        meta = {
+            'name': name,
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [parent]
+        }
+        folder = self.service.files().create(body=meta, fields='id').execute()
+        folder_id = folder.get('id')
 
-    # ── Children ─────────────────────────────────────────────────────────────
-    for i, child in enumerate(data.get('children', []), 1):
-        heading(f'{i}-BOLA: {child.get("name", "").upper()}', level=1, color=(15, 27, 51))
+        # Anyone with the link can view
+        self.service.permissions().create(
+            fileId=folder_id,
+            body={'type': 'anyone', 'role': 'reader'}
+        ).execute()
 
-        field('Ismi', child.get('name', ''))
-        field('Yoshi', child.get('age', ''))
-        field('Jinsi', child.get('gender', ''))
-        field('Asosiy xarakteri', child.get('character', ''))
+        logger.info(f"Created Drive folder '{name}' → {folder_id}")
+        return folder_id
 
-        doc.add_paragraph()
-        p = doc.add_paragraph()
-        p.add_run('Muammo tavsifi:').bold = True
-        doc.add_paragraph(child.get('problem', ''))
+    def upload_file(self, file_path: str, file_name: str, parent_id: str) -> str:
+        """Upload a file and return its Drive ID."""
+        mime = _get_mime(file_name)
+        meta  = {'name': file_name, 'parents': [parent_id]}
+        media = MediaFileUpload(file_path, mimetype=mime, resumable=True)
+        result = self.service.files().create(
+            body=meta, media_body=media, fields='id'
+        ).execute()
+        file_id = result.get('id')
 
-        field('Qahramon turi', child.get('hero', ''))
-        field('Rasmlar soni', f"{len(child.get('photos', []))} ta")
-        field('Ishtirokchi rasmlari', f"{len(child.get('participant_photos', []))} ta")
-        divider()
+        # Make file viewable by anyone with the link
+        self.service.permissions().create(
+            fileId=file_id,
+            body={'type': 'anyone', 'role': 'reader'}
+        ).execute()
 
-    # ── Extra notes ──────────────────────────────────────────────────────────
-    notes = data.get('extra_notes', '')
-    if notes and notes.lower() != "yo'q":
-        heading('QЎSHIMCHA IZOHLAR', level=1, color=(15, 27, 51))
-        doc.add_paragraph(notes)
-        divider()
+        logger.info(f"Uploaded '{file_name}' → {file_id}")
+        return file_id
 
-    # ── Footer ───────────────────────────────────────────────────────────────
-    doc.add_paragraph()
-    footer = doc.add_paragraph('NASIHA — Bola qalbidagi yaxshilik uchun sehrli eshak. 💛')
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer.runs[0].font.color.rgb = RGBColor(212, 175, 55)
-    footer.runs[0].font.size = Pt(10)
-
-    # ── Save ─────────────────────────────────────────────────────────────────
-    name_safe = data.get('client_name', 'Buyurtma').replace(' ', '_')
-    path = f"/tmp/Buyurtma_{name_safe}.docx"
-    doc.save(path)
-    return path
+    def get_shareable_link(self, file_id: str) -> str:
+        """Return a shareable Google Drive link for a file or folder."""
+        return f"https://drive.google.com/drive/folders/{file_id}"
