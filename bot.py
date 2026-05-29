@@ -1,8 +1,8 @@
 import os
 import logging
-import json
+import sys
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputMediaPhoto
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters
@@ -10,9 +10,11 @@ from telegram.ext import (
 from google_drive import GoogleDriveManager
 from doc_generator import generate_doc
 
+# ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
@@ -20,21 +22,21 @@ logger = logging.getLogger(__name__)
 (
     CLIENT_NAME, CLIENT_PHONE, CLIENT_CITY,
     HOW_MANY_CHILDREN,
-    # Per-child loop
     CHILD_NAME, CHILD_AGE, CHILD_GENDER,
     CHILD_CHARACTER, CHILD_PROBLEM, CHILD_HERO,
     CHILD_PHOTOS, CHILD_MORE_PHOTOS,
     PARTICIPANT_PHOTOS, PARTICIPANT_MORE_PHOTOS,
-    NEXT_CHILD_OR_CONTINUE,
     EXTRA_NOTES,
     CONFIRM
-) = range(17)
+) = range(16)
 
-# ── Keyboard helpers ─────────────────────────────────────────────────────────
-def kb(*rows):
+# ── Keyboards ────────────────────────────────────────────────────────────────
+def kb_col(*rows):
+    """Vertical keyboard — each item on its own row."""
     return ReplyKeyboardMarkup([[r] for r in rows], resize_keyboard=True, one_time_keyboard=True)
 
 def kb_row(*items):
+    """Horizontal keyboard — all items on one row."""
     return ReplyKeyboardMarkup([list(items)], resize_keyboard=True, one_time_keyboard=True)
 
 CHARACTER_KB = ReplyKeyboardMarkup([
@@ -50,8 +52,19 @@ HERO_KB = ReplyKeyboardMarkup([
     ["✍️ Boshqa (yozaman)"]
 ], resize_keyboard=True, one_time_keyboard=True)
 
-GENDER_KB = kb_row("👦 O'g'il", "👧 Qiz")
+GENDER_KB  = kb_row("👦 O'g'il", "👧 Qiz")
 YES_NO_KB  = kb_row("✅ Ha", "❌ Yo'q")
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def safe_text(update: Update) -> str:
+    """Return message text safely (empty string if no text)."""
+    return update.message.text.strip() if update.message.text else ""
+
+
+def gender_icon(gender_str: str) -> str:
+    return "👦" if "O'g'il" in gender_str else "👧"
+
 
 # ── /start ───────────────────────────────────────────────────────────────────
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -73,9 +86,10 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CLIENT_NAME
 
+
 # ── Client info ──────────────────────────────────────────────────────────────
 async def client_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['client_name'] = update.message.text.strip()
+    ctx.user_data['client_name'] = safe_text(update)
     await update.message.reply_text(
         "📱 Telefon raqamingizni yozing:\n"
         "_(Masalan: +998 90 123 45 67)_",
@@ -83,8 +97,9 @@ async def client_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CLIENT_PHONE
 
+
 async def client_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['client_phone'] = update.message.text.strip()
+    ctx.user_data['client_phone'] = safe_text(update)
     await update.message.reply_text(
         "🏙 Shahringiz yoki manzilingizni yozing:\n"
         "_(Masalan: Toshkent, Chilonzor tumani)_",
@@ -92,8 +107,9 @@ async def client_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CLIENT_CITY
 
+
 async def client_city(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['client_city'] = update.message.text.strip()
+    ctx.user_data['client_city'] = safe_text(update)
     await update.message.reply_text(
         "━━━━━━━━━━━━━━━\n"
         "👨‍👩‍👧‍👦 *Nechta bola uchun kitob buyurtma berasiz?*\n\n"
@@ -102,18 +118,20 @@ async def client_city(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return HOW_MANY_CHILDREN
 
+
 async def how_many_children(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.isdigit() or int(text) < 1 or int(text) > 10:
+    text = safe_text(update)
+    if not text.isdigit() or not (1 <= int(text) <= 10):
         await update.message.reply_text("⚠️ Iltimos, 1 dan 10 gacha raqam yozing.")
         return HOW_MANY_CHILDREN
     ctx.user_data['total_children'] = int(text)
     ctx.user_data['current_child'] = 1
     return await ask_child_name(update, ctx)
 
+
 # ── Per-child questions ──────────────────────────────────────────────────────
 async def ask_child_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    n = ctx.user_data['current_child']
+    n     = ctx.user_data['current_child']
     total = ctx.user_data['total_children']
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━\n"
@@ -125,24 +143,31 @@ async def ask_child_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CHILD_NAME
 
+
 async def child_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['current_child_data'] = {'name': update.message.text.strip()}
+    ctx.user_data['current_child_data'] = {
+        'name': safe_text(update),
+        'photos': [],
+        'participant_photos': []
+    }
     await update.message.reply_text(
         "🎂 Yoshini yozing:\n_(Masalan: 7)_",
         parse_mode='Markdown'
     )
     return CHILD_AGE
 
+
 async def child_age(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['current_child_data']['age'] = update.message.text.strip()
+    ctx.user_data['current_child_data']['age'] = safe_text(update)
     await update.message.reply_text(
         "👦👧 Jinsi?",
         reply_markup=GENDER_KB
     )
     return CHILD_GENDER
 
+
 async def child_gender(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['current_child_data']['gender'] = update.message.text.strip()
+    ctx.user_data['current_child_data']['gender'] = safe_text(update)
     name = ctx.user_data['current_child_data']['name']
     await update.message.reply_text(
         f"🧠 *{name}ning asosiy xususiyati qaysi?*\n\n"
@@ -152,8 +177,9 @@ async def child_gender(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CHILD_CHARACTER
 
+
 async def child_character(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['current_child_data']['character'] = update.message.text.strip()
+    ctx.user_data['current_child_data']['character'] = safe_text(update)
     name = ctx.user_data['current_child_data']['name']
     await update.message.reply_text(
         f"💬 *{name} haqida ko'proq gapirib bering:*\n\n"
@@ -164,8 +190,9 @@ async def child_character(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CHILD_PROBLEM
 
+
 async def child_problem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['current_child_data']['problem'] = update.message.text.strip()
+    ctx.user_data['current_child_data']['problem'] = safe_text(update)
     name = ctx.user_data['current_child_data']['name']
     await update.message.reply_text(
         f"🦸 *Hikoya qahramoni kim bo'lsin?*\n\n"
@@ -175,10 +202,9 @@ async def child_problem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CHILD_HERO
 
+
 async def child_hero(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['current_child_data']['hero'] = update.message.text.strip()
-    ctx.user_data['current_child_data']['photos'] = []
-    ctx.user_data['current_child_data']['participant_photos'] = []
+    ctx.user_data['current_child_data']['hero'] = safe_text(update)
     name = ctx.user_data['current_child_data']['name']
     await update.message.reply_text(
         f"━━━━━━━━━━━━━━━\n"
@@ -197,22 +223,28 @@ async def child_hero(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return CHILD_PHOTOS
 
-async def child_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    photos = ctx.user_data['current_child_data']['photos']
 
-    # Accept photo or document (original quality)
+# ── Photo handlers ───────────────────────────────────────────────────────────
+def _extract_file(update: Update) -> dict | None:
+    """Extract file_id and type from a message. Returns None if not an image."""
     if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        photos.append({'type': 'photo', 'file_id': file_id})
-    elif update.message.document and update.message.document.mime_type.startswith('image/'):
-        file_id = update.message.document.file_id
-        photos.append({'type': 'document', 'file_id': file_id})
-    else:
+        return {'type': 'photo', 'file_id': update.message.photo[-1].file_id}
+    if (update.message.document
+            and update.message.document.mime_type
+            and update.message.document.mime_type.startswith('image/')):
+        return {'type': 'document', 'file_id': update.message.document.file_id}
+    return None
+
+
+async def child_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    file_info = _extract_file(update)
+    if not file_info:
         await update.message.reply_text("⚠️ Iltimos, rasm yuboring (JPG, PNG, HEIC).")
         return CHILD_PHOTOS
 
+    photos = ctx.user_data['current_child_data']['photos']
+    photos.append(file_info)
     count = len(photos)
-    name = ctx.user_data['current_child_data']['name']
 
     if count < 3:
         await update.message.reply_text(
@@ -230,71 +262,80 @@ async def child_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return CHILD_MORE_PHOTOS
 
+
 async def child_more_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = safe_text(update)
     if "Ha" in text:
         await update.message.reply_text(
             "📸 Davom eting, rasmlarni yuboring:",
             reply_markup=ReplyKeyboardRemove()
         )
         return CHILD_PHOTOS
-    else:
-        count = len(ctx.user_data['current_child_data']['photos'])
-        await update.message.reply_text(
-            f"👍 Jami *{count} ta rasm* saqlandi!\n\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"👨‍👩‍👧 *Hikoyada boshqa ishtirokchilar bormi?*\n\n"
-            f"_(Ota, ona, buvi, do'st va boshqalar)_\n\n"
-            f"Ularning rasmlarini ham yuborishingiz mumkin ✨",
-            parse_mode='Markdown',
-            reply_markup=YES_NO_KB
-        )
-        return PARTICIPANT_PHOTOS
+
+    count = len(ctx.user_data['current_child_data']['photos'])
+    await update.message.reply_text(
+        f"👍 Jami *{count} ta rasm* saqlandi!\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👨‍👩‍👧 *Hikoyada boshqa ishtirokchilar bormi?*\n\n"
+        f"_(Ota, ona, buvi, do'st va boshqalar)_\n\n"
+        f"Ularning rasmlarini ham yuborishingiz mumkin ✨",
+        parse_mode='Markdown',
+        reply_markup=YES_NO_KB
+    )
+    return PARTICIPANT_PHOTOS
+
 
 async def participant_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip() if update.message.text else ""
+    text = safe_text(update)
+
+    # User said NO — skip participant photos
     if "Yo'q" in text:
         return await next_child_or_continue(update, ctx)
 
-    # They said yes or sent a photo
-    p_photos = ctx.user_data['current_child_data']['participant_photos']
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        p_photos.append({'type': 'photo', 'file_id': file_id})
-        count = len(p_photos)
+    file_info = _extract_file(update)
+    if not file_info:
+        # Could be "Ha" reply or unknown message — ask them to send photo
         await update.message.reply_text(
-            f"✅ *{count} ta ishtirokchi rasmi qabul qilindi.*\n\nYana qo'shmoqchimisiz?",
-            parse_mode='Markdown',
-            reply_markup=YES_NO_KB
-        )
-        return PARTICIPANT_MORE_PHOTOS
-    elif update.message.document and update.message.document.mime_type.startswith('image/'):
-        file_id = update.message.document.file_id
-        p_photos.append({'type': 'document', 'file_id': file_id})
-        count = len(p_photos)
-        await update.message.reply_text(
-            f"✅ *{count} ta ishtirokchi rasmi qabul qilindi.*\n\nYana qo'shmoqchimisiz?",
-            parse_mode='Markdown',
-            reply_markup=YES_NO_KB
-        )
-        return PARTICIPANT_MORE_PHOTOS
-    else:
-        await update.message.reply_text(
-            "📸 Ishtirokchilar rasmlarini yuboring yoki 'Yo'q' tugmasini bosing:",
+            "📸 Ishtirokchilar rasmlarini yuboring yoki '❌ Yo'q' tugmasini bosing:",
             reply_markup=YES_NO_KB
         )
         return PARTICIPANT_PHOTOS
 
+    p_photos = ctx.user_data['current_child_data']['participant_photos']
+    p_photos.append(file_info)
+    count = len(p_photos)
+    await update.message.reply_text(
+        f"✅ *{count} ta ishtirokchi rasmi qabul qilindi.*\n\nYana qo'shmoqchimisiz?",
+        parse_mode='Markdown',
+        reply_markup=YES_NO_KB
+    )
+    return PARTICIPANT_MORE_PHOTOS
+
+
 async def participant_more_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip() if update.message.text else ""
+    # Could be a photo sent directly
+    file_info = _extract_file(update)
+    if file_info:
+        p_photos = ctx.user_data['current_child_data']['participant_photos']
+        p_photos.append(file_info)
+        count = len(p_photos)
+        await update.message.reply_text(
+            f"✅ *{count} ta ishtirokchi rasmi qabul qilindi.*\n\nYana qo'shmoqchimisiz?",
+            parse_mode='Markdown',
+            reply_markup=YES_NO_KB
+        )
+        return PARTICIPANT_MORE_PHOTOS
+
+    text = safe_text(update)
     if "Ha" in text:
         await update.message.reply_text("📸 Davom eting:", reply_markup=ReplyKeyboardRemove())
         return PARTICIPANT_PHOTOS
-    else:
-        return await next_child_or_continue(update, ctx)
 
+    return await next_child_or_continue(update, ctx)
+
+
+# ── Child loop ───────────────────────────────────────────────────────────────
 async def next_child_or_continue(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # Save current child
     child_data = ctx.user_data.pop('current_child_data')
     ctx.user_data['children'].append(child_data)
 
@@ -310,51 +351,57 @@ async def next_child_or_continue(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             reply_markup=ReplyKeyboardRemove()
         )
         return await ask_child_name(update, ctx)
-    else:
-        await update.message.reply_text(
-            "━━━━━━━━━━━━━━━\n"
-            "📝 *QЎSHIMCHA IZOH*\n\n"
-            "Bizga bildirishni xohlagan biror maxsus xohish, e'tibor qaratish kerak bo'lgan narsa bormi?\n\n"
-            "_(Masalan: Bolam qo'g'irchoqlarni yaxshi ko'radi, yashil rangni yaxshi ko'radi, tug'ilgan kuni 15-iyun...)_\n\n"
-            "Yo'q bo'lsa — *'Yo'q'* yozing.",
-            parse_mode='Markdown',
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return EXTRA_NOTES
+
+    await update.message.reply_text(
+        "━━━━━━━━━━━━━━━\n"
+        "📝 *QO'SHIMCHA IZOH*\n\n"
+        "Bizga bildirishni xohlagan biror maxsus xohish yoki e'tibor qaratish kerak bo'lgan narsa bormi?\n\n"
+        "_(Masalan: Bolam qo'g'irchoqlarni yaxshi ko'radi, yashil rangni yaxshi ko'radi, "
+        "tug'ilgan kuni 15-iyun...)_\n\n"
+        "Yo'q bo'lsa — *Yo'q* yozing.",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return EXTRA_NOTES
+
 
 # ── Extra notes & confirm ────────────────────────────────────────────────────
 async def extra_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    ctx.user_data['extra_notes'] = update.message.text.strip()
-
-    # Build summary
+    ctx.user_data['extra_notes'] = safe_text(update)
     data = ctx.user_data
-    summary = f"📋 *BUYURTMA XULOSASI*\n\n"
-    summary += f"👤 Mijoz: *{data['client_name']}*\n"
-    summary += f"📱 Tel: {data['client_phone']}\n"
-    summary += f"🏙 Manzil: {data['client_city']}\n\n"
+
+    lines = [
+        "📋 *BUYURTMA XULOSASI*\n",
+        f"👤 Mijoz: *{data['client_name']}*",
+        f"📱 Tel: {data['client_phone']}",
+        f"🏙 Manzil: {data['client_city']}\n",
+    ]
 
     for i, child in enumerate(data['children'], 1):
-        summary += f"👶 *{i}-bola: {child['name']}*\n"
-        summary += f"   🎂 Yoshi: {child['age']}\n"
-        gender_icon = '👦' if "O'g'il" in child['gender'] else '👧'
-        summary += f"   {gender_icon} Jinsi: {child['gender']}\n"
-        summary += f"   🧠 Xarakteri: {child['character']}\n"
-        summary += f"   📸 Rasmlar: {len(child['photos'])} ta\n\n"
+        icon = gender_icon(child.get('gender', ''))
+        lines.append(f"👶 *{i}-bola: {child['name']}*")
+        lines.append(f"   🎂 Yoshi: {child['age']}")
+        lines.append(f"   {icon} Jinsi: {child['gender']}")
+        lines.append(f"   🧠 Xarakteri: {child['character']}")
+        lines.append(f"   📸 Rasmlar: {len(child['photos'])} ta\n")
 
-    if data['extra_notes'] != "Yo'q":
-        summary += f"📝 Izoh: {data['extra_notes']}\n"
+    if data['extra_notes'].lower() not in ("yo'q", "yoq", ""):
+        lines.append(f"📝 Izoh: {data['extra_notes']}\n")
 
-    summary += "\n━━━━━━━━━━━━━━━\n✅ Ma'lumotlar to'g'rimi? Tasdiqlaysizmi?"
+    lines.append("━━━━━━━━━━━━━━━")
+    lines.append("✅ Ma'lumotlar to'g'rimi? Tasdiqlaysizmi?")
 
     await update.message.reply_text(
-        summary,
+        "\n".join(lines),
         parse_mode='Markdown',
         reply_markup=YES_NO_KB
     )
     return CONFIRM
 
+
 async def confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = safe_text(update)
+
     if "Yo'q" in text:
         await update.message.reply_text(
             "🔄 Qaytadan boshlash uchun /start bosing.",
@@ -368,23 +415,24 @@ async def confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        drive = GoogleDriveManager()
-        data  = ctx.user_data
-        bot   = ctx.application.bot
+        drive   = GoogleDriveManager()
+        data    = ctx.user_data
+        bot     = ctx.application.bot
 
-        # Create main folder: "Familiya_Ism — Sana"
         date_str    = datetime.now().strftime("%Y-%m-%d")
         folder_name = f"{data['client_name']} — {data['client_city']} — {date_str}"
         main_folder_id = drive.create_folder(folder_name)
 
-        # Generate and upload DOC
+        # Generate and upload Word doc
         doc_path = generate_doc(data)
         drive.upload_file(doc_path, f"Buyurtma_{data['client_name']}.docx", main_folder_id)
 
         # Upload child photos
-        photos_folder_id = drive.create_folder("Child_Photos", main_folder_id)
+        photos_folder_id = drive.create_folder("Rasmlar", main_folder_id)
         for i, child in enumerate(data['children'], 1):
-            child_folder_id = drive.create_folder(f"{i}-BOLA_{child['name']}", photos_folder_id)
+            child_folder_id = drive.create_folder(
+                f"{i}-BOLA_{child['name']}", photos_folder_id
+            )
 
             for j, p in enumerate(child['photos'], 1):
                 tg_file  = await bot.get_file(p['file_id'])
@@ -392,16 +440,23 @@ async def confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 tmp_path = f"/tmp/{child['name']}_{j}.{ext}"
                 await tg_file.download_to_drive(tmp_path)
                 drive.upload_file(tmp_path, f"rasm_{j}.{ext}", child_folder_id)
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
-            # Participant photos
             if child['participant_photos']:
                 part_folder_id = drive.create_folder("Ishtirokchilar", child_folder_id)
                 for j, p in enumerate(child['participant_photos'], 1):
                     tg_file  = await bot.get_file(p['file_id'])
                     ext      = 'jpg' if p['type'] == 'photo' else tg_file.file_path.split('.')[-1]
-                    tmp_path = f"/tmp/participant_{j}.{ext}"
+                    tmp_path = f"/tmp/participant_{child['name']}_{j}.{ext}"
                     await tg_file.download_to_drive(tmp_path)
                     drive.upload_file(tmp_path, f"ishtirokchi_{j}.{ext}", part_folder_id)
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
 
         folder_link = drive.get_shareable_link(main_folder_id)
         await update.message.reply_text(
@@ -409,19 +464,21 @@ async def confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "✅ Barcha ma'lumotlar saqlandi\n"
             "✅ Rasmlar yuklandi\n"
             "✅ Hujjat tayyorlandi\n\n"
-            f"📁 Papka nomi: `{folder_name}`\n"
+            f"📁 Papka: `{folder_name}`\n"
             f"🔗 [Drive papkasini ko'rish]({folder_link})\n\n"
             "Tez orada siz bilan bog'lanamiz! 💛\n\n"
             "_Nasiha — Mehr va Tarbiya Olami_",
             parse_mode='Markdown'
         )
+
     except Exception as e:
-        logger.error(f"Error saving order: {e}")
+        logger.error(f"Error saving order: {e}", exc_info=True)
         await update.message.reply_text(
-            "⚠️ Texnik xato yuz berdi. Iltimos, @nasiha_support ga yozing.",
+            "⚠️ Texnik xato yuz berdi. Iltimos, @nasiha_support ga yozing."
         )
 
     return ConversationHandler.END
+
 
 async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -430,50 +487,59 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     token = os.environ.get("BOT_TOKEN")
     if not token:
-        raise ValueError("BOT_TOKEN environment variable not set!")
+        logger.critical("BOT_TOKEN environment variable is not set! Exiting.")
+        sys.exit(1)   # <-- exit gracefully, no crash loop
 
     app = Application.builder().token(token).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            CLIENT_NAME:            [MessageHandler(filters.TEXT & ~filters.COMMAND, client_name)],
-            CLIENT_PHONE:           [MessageHandler(filters.TEXT & ~filters.COMMAND, client_phone)],
-            CLIENT_CITY:            [MessageHandler(filters.TEXT & ~filters.COMMAND, client_city)],
-            HOW_MANY_CHILDREN:      [MessageHandler(filters.TEXT & ~filters.COMMAND, how_many_children)],
-            CHILD_NAME:             [MessageHandler(filters.TEXT & ~filters.COMMAND, child_name)],
-            CHILD_AGE:              [MessageHandler(filters.TEXT & ~filters.COMMAND, child_age)],
-            CHILD_GENDER:           [MessageHandler(filters.TEXT & ~filters.COMMAND, child_gender)],
-            CHILD_CHARACTER:        [MessageHandler(filters.TEXT & ~filters.COMMAND, child_character)],
-            CHILD_PROBLEM:          [MessageHandler(filters.TEXT & ~filters.COMMAND, child_problem)],
-            CHILD_HERO:             [MessageHandler(filters.TEXT & ~filters.COMMAND, child_hero)],
-            CHILD_PHOTOS:           [MessageHandler(filters.PHOTO | filters.Document.IMAGE, child_photos)],
-            CHILD_MORE_PHOTOS:      [
-                                        MessageHandler(filters.PHOTO | filters.Document.IMAGE, child_photos),
-                                        MessageHandler(filters.TEXT & ~filters.COMMAND, child_more_photos)
-                                    ],
-            PARTICIPANT_PHOTOS:     [
-                                        MessageHandler(filters.PHOTO | filters.Document.IMAGE, participant_photos),
-                                        MessageHandler(filters.TEXT & ~filters.COMMAND, participant_photos)
-                                    ],
-            PARTICIPANT_MORE_PHOTOS:[
-                                        MessageHandler(filters.PHOTO | filters.Document.IMAGE, participant_photos),
-                                        MessageHandler(filters.TEXT & ~filters.COMMAND, participant_more_photos)
-                                    ],
-            EXTRA_NOTES:            [MessageHandler(filters.TEXT & ~filters.COMMAND, extra_notes)],
-            CONFIRM:                [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
+            CLIENT_NAME:             [MessageHandler(filters.TEXT & ~filters.COMMAND, client_name)],
+            CLIENT_PHONE:            [MessageHandler(filters.TEXT & ~filters.COMMAND, client_phone)],
+            CLIENT_CITY:             [MessageHandler(filters.TEXT & ~filters.COMMAND, client_city)],
+            HOW_MANY_CHILDREN:       [MessageHandler(filters.TEXT & ~filters.COMMAND, how_many_children)],
+            CHILD_NAME:              [MessageHandler(filters.TEXT & ~filters.COMMAND, child_name)],
+            CHILD_AGE:               [MessageHandler(filters.TEXT & ~filters.COMMAND, child_age)],
+            CHILD_GENDER:            [MessageHandler(filters.TEXT & ~filters.COMMAND, child_gender)],
+            CHILD_CHARACTER:         [MessageHandler(filters.TEXT & ~filters.COMMAND, child_character)],
+            CHILD_PROBLEM:           [MessageHandler(filters.TEXT & ~filters.COMMAND, child_problem)],
+            CHILD_HERO:              [MessageHandler(filters.TEXT & ~filters.COMMAND, child_hero)],
+            CHILD_PHOTOS:            [
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, child_photos),
+            ],
+            CHILD_MORE_PHOTOS:       [
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, child_photos),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, child_more_photos),
+            ],
+            PARTICIPANT_PHOTOS:      [
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, participant_photos),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, participant_photos),
+            ],
+            PARTICIPANT_MORE_PHOTOS: [
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, participant_more_photos),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, participant_more_photos),
+            ],
+            EXTRA_NOTES:             [MessageHandler(filters.TEXT & ~filters.COMMAND, extra_notes)],
+            CONFIRM:                 [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
         },
-        fallbacks=[CommandHandler("bekor", cancel), CommandHandler("cancel", cancel)],
-        allow_reentry=True
+        fallbacks=[
+            CommandHandler("bekor", cancel),
+            CommandHandler("cancel", cancel),
+        ],
+        allow_reentry=True,
+        conversation_timeout=3600,   # 1 soat faoliyatsizlikda avtomatik yopiladi
     )
 
     app.add_handler(conv_handler)
-    logger.info("Bot started...")
+    logger.info("✅ Nasiha bot started successfully.")
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
