@@ -252,7 +252,7 @@ async def child_more_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return PARTICIPANT_PHOTOS
 
 async def participant_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = update.message.text.strip() if update.message.text else ""
     if "Yo'q" in text:
         return await next_child_or_continue(update, ctx)
 
@@ -286,7 +286,7 @@ async def participant_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return PARTICIPANT_PHOTOS
 
 async def participant_more_photos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = update.message.text.strip() if update.message.text else ""
     if "Ha" in text:
         await update.message.reply_text("📸 Davom eting:", reply_markup=ReplyKeyboardRemove())
         return PARTICIPANT_PHOTOS
@@ -336,8 +336,8 @@ async def extra_notes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for i, child in enumerate(data['children'], 1):
         summary += f"👶 *{i}-bola: {child['name']}*\n"
         summary += f"   🎂 Yoshi: {child['age']}\n"
-        emoji = "👦" if "O‘g‘il" in child['gender'] else "👧"
-        summary += f"{emoji} Jinsi: {child['gender']}\n"
+        gender_icon = '👦' if "O'g'il" in child['gender'] else '👧'
+        summary += f"   {gender_icon} Jinsi: {child['gender']}\n"
         summary += f"   🧠 Xarakteri: {child['character']}\n"
         summary += f"   📸 Rasmlar: {len(child['photos'])} ta\n\n"
 
@@ -403,12 +403,14 @@ async def confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     await tg_file.download_to_drive(tmp_path)
                     drive.upload_file(tmp_path, f"ishtirokchi_{j}.{ext}", part_folder_id)
 
+        folder_link = drive.get_shareable_link(main_folder_id)
         await update.message.reply_text(
             "🎉 *Buyurtmangiz qabul qilindi!*\n\n"
             "✅ Barcha ma'lumotlar saqlandi\n"
             "✅ Rasmlar yuklandi\n"
             "✅ Hujjat tayyorlandi\n\n"
-            f"📁 Papka nomi: `{folder_name}`\n\n"
+            f"📁 Papka nomi: `{folder_name}`\n"
+            f"🔗 [Drive papkasini ko'rish]({folder_link})\n\n"
             "Tez orada siz bilan bog'lanamiz! 💛\n\n"
             "_Nasiha — Mehr va Tarbiya Olami_",
             parse_mode='Markdown'
