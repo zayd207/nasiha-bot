@@ -148,7 +148,7 @@ async def main():
             CLIENT_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, client_phone)],
             CLIENT_CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, client_city)],
             HOW_MANY_CHILDREN: [MessageHandler(filters.TEXT & ~filters.COMMAND, how_many_children)],
-            CHILD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, child_name)],
+            CHILD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, client_name)],
             CHILD_AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, child_age)],
             CHILD_GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, child_gender)],
             CHILD_CHARACTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, child_character)],
